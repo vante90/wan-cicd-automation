@@ -26,7 +26,7 @@ Nodes: A1, A2, B1, B2, C1, C2, D1, D2, E1, E2.
 
 | Purpose | Range |
 |---|---|
-| Management (OOB, Gi0/0 on every node) | 10.255.0.0/24, host (br-mgmt) = 10.255.0.1 |
+| Management (OOB, Gi0/7 on every node) | 10.255.0.0/24, host (br-mgmt) = 10.255.0.1 |
 | Point-to-point links | 10.0.0.0/24, one /30 per link |
 | Loopbacks | 10.1.1.0/24, one /32 per node |
 
@@ -51,21 +51,22 @@ Fill the interface columns from GNS3 (View > Show/Hide interface labels). Data i
 
 | # | Endpoint 1 | Intf 1 | Endpoint 2 | Intf 2 | Subnet | IP 1 | IP 2 |
 |---|---|---|---|---|---|---|---|
-| 1 | WAN-A1 | Gi0/? | WAN-A2 | Gi0/? | 10.0.0.0/30 | .1 | .2 |
-| 2 | WAN-A1 | Gi0/? | WAN-B1 | Gi0/? | 10.0.0.4/30 | .5 | .6 |
-| 3 | WAN-A1 | Gi0/? | WAN-C1 | Gi0/? | 10.0.0.8/30 | .9 | .10 |
-| 4 | WAN-A2 | Gi0/? | WAN-B2 | Gi0/? | 10.0.0.12/30 | .13 | .14 |
-| 5 | WAN-B1 | Gi0/? | WAN-B2 | Gi0/? | 10.0.0.16/30 | .17 | .18 |
-| 6 | WAN-A2 | Gi0/? | WAN-D1 | Gi0/? | 10.0.0.20/30 | .21 | .22 |
-| 7 | WAN-D1 | Gi0/? | WAN-D2 | Gi0/? | 10.0.0.24/30 | .25 | .26 |
-| 8 | WAN-D2 | Gi0/? | WAN-B1 | Gi0/? | 10.0.0.28/30 | .29 | .30 |
-| 9 | WAN-C1 | Gi0/? | WAN-C2 | Gi0/? | 10.0.0.32/30 | .33 | .34 |
-| 10 | WAN-C2 | Gi0/? | WAN-B1 | Gi0/? | 10.0.0.36/30 | .37 | .38 |
-| 11 | WAN-C1 | Gi0/? | WAN-E1 | Gi0/? | 10.0.0.40/30 | .41 | .42 |
-| 12 | WAN-E1 | Gi0/? | WAN-B2 | Gi0/? | 10.0.0.44/30 | .45 | .46 |
-| 13 | WAN-C1 | Gi0/? | WAN-E2 | Gi0/? | 10.0.0.48/30 | .49 | .50 |
-| 14 | WAN-E2 | Gi0/? | WAN-E1 | Gi0/? | 10.0.0.52/30 | .53 | .54 |
-| 15 | WAN-E2 | Gi0/? | WAN-B1 | Gi0/? | 10.0.0.56/30 | .57 | .58 |
+| 1 | WAN-A1 | Gi0/0 | WAN-A2 | Gi0/0 | 10.0.0.0/30 | .1 | .2 |
+| 2 | WAN-A1 | Gi0/2 | WAN-B1 | Gi0/2 | 10.0.0.4/30 | .5 | .6 |
+| 3 | WAN-A1 | Gi0/1 | WAN-C1 | Gi0/1 | 10.0.0.8/30 | .9 | .10 |
+| 4 | WAN-A2 | Gi0/2 | WAN-B2 | Gi0/2 | 10.0.0.12/30 | .13 | .14 |
+| 5 | WAN-B1 | Gi0/0 | WAN-B2 | Gi0/0 | 10.0.0.16/30 | .17 | .18 |
+| 6 | WAN-A2 | Gi0/1 | WAN-D1 | Gi0/1 | 10.0.0.20/30 | .21 | .22 |
+| 7 | WAN-D1 | Gi0/0 | WAN-D2 | Gi0/0 | 10.0.0.24/30 | .25 | .26 |
+| 8 | WAN-D2 | Gi0/1 | WAN-B1 | Gi0/1 | 10.0.0.28/30 | .29 | .30 |
+| 9 | WAN-C1 | Gi0/0 | WAN-C2 | Gi0/0 | 10.0.0.32/30 | .33 | .34 |
+| 10 | WAN-C2 | Gi0/3 | WAN-B1 | Gi0/3 | 10.0.0.36/30 | .37 | .38 |
+| 11 | WAN-C1 | Gi0/3 | WAN-E1 | Gi0/3 | 10.0.0.40/30 | .41 | .42 |
+| 12 | WAN-E1 | Gi0/1 | WAN-B2 | Gi0/1 | 10.0.0.44/30 | .45 | .46 |
+| 13 | WAN-C1 | Gi0/2 | WAN-E2 | Gi0/2 | 10.0.0.48/30 | .49 | .50 |
+| 14 | WAN-E2 | Gi0/0 | WAN-E1 | Gi0/0 | 10.0.0.52/30 | .53 | .54 |
+| 15 | WAN-E2 | Gi0/4 | WAN-B1 | Gi0/4 | 10.0.0.56/30 | .57 | .58 |
+
 
 ## Notes for a later containerlab move
 
