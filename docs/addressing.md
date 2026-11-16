@@ -6,7 +6,8 @@ Companion to `topology.md` (node table + link table). This file adds the BGP lay
 
 - One AS per location, eBGP between locations, iBGP between the two routers inside a location.
 - Location B is the "internet edge". In the lab, ISP1/ISP2 are simulated by `ip route 0.0.0.0 0.0.0.0 Null0 220` on B1 and B2, which is then originated into BGP with `network 0.0.0.0`.
-- Every other location prefers the default route that comes from B (local-preference 200 inbound on the sessions that lead toward B).
+- B1 is the primary exit for every location and B2 is the backup. Non-B routers prefer the default learned from B1 (local-pref 200), then from B2 (150). B1 prefers what it learns from all neighbours at 120 and B2 at 110, so B2 sends traffic through B1 first.
+- Inside a location, the router without a direct link to B1 sends the default through its partner (A2 to A1, D1 to D2, C1 to C2, E1 to E2).
 - Each router announces one /24 of its own, hosted on `Loopback1`.
 
 ## AS numbers (private range)
@@ -56,7 +57,7 @@ Peered on loopbacks (`update-source Loopback0`, `next-hop-self`). Each pair has 
 ## eBGP sessions (between locations)
 
 Peered on the directly connected /30 link IPs (no update-source, no multihop).
-"From B" = this session carries the default route from the main site, so inbound local-pref 200 applies.
+"From B" = this session receives the default route from the main site. Sessions to B1 get local-pref 200 on the default, sessions to B2 get 150. Other sessions keep 100.
 
 | Link # | Router 1 (AS) | IP 1 | Router 2 (AS) | IP 2 | From B? |
 |---|---|---|---|---|---|
@@ -71,11 +72,11 @@ Peered on the directly connected /30 link IPs (no update-source, no multihop).
 | 11 | WAN-C1 (65003) | 10.0.0.41 | WAN-E1 (65005) | 10.0.0.42 | no (backup path) |
 | 13 | WAN-C1 (65003) | 10.0.0.49 | WAN-E2 (65005) | 10.0.0.50 | no (backup path) |
 
-Routers without a direct link to B (C1, D1) learn the default over iBGP from their location partner (local-pref 200 is carried inside the AS) and as a longer-path backup over eBGP from a neighbouring location.
+Routers without a direct link to B (C1, D1) learn the default over iBGP from their location partner and as a backup over eBGP from a neighbouring location.
 
 ## Default route and local-preference policy
 
-On WAN-B1 and WAN-B2 (simulated ISP default):
+Simulated ISP default on WAN-B1 and WAN-B2:
 
 ```
 ip route 0.0.0.0 0.0.0.0 Null0 220
@@ -83,45 +84,60 @@ router bgp 65002
  network 0.0.0.0
 ```
 
-On every non-B router, inbound route-map on the sessions marked "From B":
+### Non-B routers: prefer B1, then B2, only for the default
 
 ```
-route-map FROM-B-DEFAULT permit 10
+ip prefix-list DEFAULT-ONLY seq 5 permit 0.0.0.0/0
+route-map FROM-B1 permit 10
+ match ip address prefix-list DEFAULT-ONLY
  set local-preference 200
-!
-router bgp <AS>
- neighbor <B-router-link-IP> route-map FROM-B-DEFAULT in
+route-map FROM-B1 permit 20
+route-map FROM-B2 permit 10
+ match ip address prefix-list DEFAULT-ONLY
+ set local-preference 150
+route-map FROM-B2 permit 20
 ```
 
-All other sessions keep the default local-preference of 100, so the path via B wins and the other locations act as backup.
+Applied inbound on the eBGP sessions to B1 (A1, C2, D2, E2) and to B2 (A2, E1). The match on the default matters: without it, A would also prefer the path via B toward C, D and E, and those routes would hairpin through B instead of using the direct inter-site links.
 
-Note: local-preference is not carried across eBGP. It decides the exit choice inside each AS (for example A1 vs A2), and the iBGP partner sees it.
+Resulting paths for the default:
 
-## Template for one router (WAN-A1)
+| Router | Best default | Path |
+|---|---|---|
+| A1 | eBGP from B1 (LP 200) | A1 > B1 |
+| A2 | iBGP from A1 (LP 200) beats eBGP from B2 (150) | A2 > A1 > B1 |
+| C2 | eBGP from B1 | C2 > B1 |
+| C1 | iBGP from C2 | C1 > C2 > B1 |
+| D2 | eBGP from B1 | D2 > B1 |
+| D1 | iBGP from D2 | D1 > D2 > B1 |
+| E2 | eBGP from B1 | E2 > B1 |
+| E1 | iBGP from E2 (LP 200) beats eBGP from B2 (150) | E1 > E2 > B1 |
+
+If B1 or the link to it fails, the B2 path at LP 150 takes over automatically.
+
+### B1 and B2: B1 is primary for traffic toward every location
 
 ```
-router bgp 65001
- bgp router-id 10.1.1.1
- bgp log-neighbor-changes
- network 172.16.1.0 mask 255.255.255.0
- ! iBGP
- neighbor 10.1.1.2 remote-as 65001
- neighbor 10.1.1.2 update-source Loopback0
- neighbor 10.1.1.2 next-hop-self
- ! eBGP
- neighbor 10.0.0.6 remote-as 65002
- neighbor 10.0.0.6 route-map FROM-B-DEFAULT in
- neighbor 10.0.0.10 remote-as 65003
-!
-ip route 10.1.1.2 255.255.255.255 10.0.0.2
+! WAN-B1, on every eBGP neighbour (A1, C2, D2, E2), inbound
+route-map FROM-EBGP permit 10
+ set local-preference 120
+! WAN-B2, on every eBGP neighbour (A2, E1), inbound
+route-map FROM-EBGP permit 10
+ set local-preference 110
 ```
+
+B2 learns B1's routes over iBGP with LP 120, which beats its own direct eBGP routes at 110, so B2 sends traffic toward A, C, D and E through B1. If B1 fails, B2 uses its direct sessions. Local-preference never crosses eBGP, so this only controls how AS B sends traffic out.
+
+After changing a route-map, run `clear ip bgp <neighbor> soft in` (or `clear ip bgp * soft in`).
 
 ## Verification
 
 - `show ip bgp summary` : all sessions Established.
 - `show ip bgp 0.0.0.0` on A1: best path via 10.0.0.6, local-pref 200.
 - `show ip route 0.0.0.0` on every non-B router: BGP default present.
-- Shut the A1-B1 link: A1 should fail over to the default via A2 (iBGP) or via C1.
+- `show ip bgp 0.0.0.0` on A2: best path via 10.1.1.1 (A1), local-pref 200.
+- `show ip bgp 172.16.1.0` on B2: best path via 10.1.1.3 (B1), local-pref 120.
+- Shut the A1-B1 link: A1 should fail over to the default via A2 (iBGP, local-pref 150 from B2), and A2 should switch to B2 directly.
 
 ## Interface note
 
