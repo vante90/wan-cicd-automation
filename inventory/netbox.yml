@@ -1,0 +1,17 @@
+# Ansible dynamic inventory from NetBox (step 5)
+# Test:  export NETBOX_API=http://localhost:8000 NETBOX_TOKEN='nbt_xxx.yyy'
+#        ansible-inventory -i inventory/netbox.yml --graph
+# Needs: ansible-galaxy collection install netbox.netbox --upgrade
+plugin: netbox.netbox.nb_inventory
+api_endpoint: http://localhost:8000      # token is read from $NETBOX_TOKEN
+validate_certs: false
+interfaces: true                         # hostvars get interfaces + their IPs
+device_query_filters:
+  - role: wan-router
+group_by:
+  - sites
+  - device_roles
+  - platforms
+compose:
+  ansible_network_os: "'cisco.ios.ios'"
+  ansible_connection: "'ansible.netcommon.network_cli'"
