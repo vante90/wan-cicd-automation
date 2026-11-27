@@ -18,7 +18,8 @@ Phase 2 (build the topology) is in progress: links are cabled in GNS3, the addre
 - Site A is the default route to the internet: A1/A2 connect to GNS3 Cloud1 (host TAP interface `tun-gns3`, 10.255.0.0/24) and announce 0.0.0.0/0 to B and C
 - B and C are managed in-band over their loopbacks
 - Traffic engineering: plane 1 is primary for internet and management traffic, plane 2 is primary for site-to-site traffic, each plane backs up the other
-- HSRP on Gi0/7 gives each site a redundant LAN gateway, and BFD gives fast failure detection
+- Two LANs per site with HSRP gateways: LAN-INET (Gi0/6, active on router 1) for internet traffic and LAN-S2S (Gi0/7, active on router 2) for site-to-site traffic
+- BFD gives fast failure detection
 - Later: Arista spine/leaf fabric behind each site
 
 Full details: [docs/topology.md](docs/topology.md) and [docs/addressing.md](docs/addressing.md).

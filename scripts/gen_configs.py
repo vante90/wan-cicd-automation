@@ -19,13 +19,16 @@ SITES = {
 
 # Prefixes each site originates (and so what its neighbours may accept from it)
 ORIGIN = {
-    "A": ["0.0.0.0/0", "10.1.0.0/16", "10.255.0.0/24", "10.255.1.0/24"],
-    "B": ["10.2.0.0/16", "10.255.2.0/24"],
-    "C": ["10.3.0.0/16", "10.255.3.0/24"],
+    "A": ["0.0.0.0/0", "10.1.0.0/16", "10.255.0.0/24", "10.255.1.0/24", "10.1.2.0/24"],
+    "B": ["10.2.0.0/16", "10.255.2.0/24", "10.2.2.0/24"],
+    "C": ["10.3.0.0/16", "10.255.3.0/24", "10.3.2.0/24"],
 }
 
 # Traffic classes: class 1 prefers plane 1, class 2 prefers plane 2
-CLASS1 = ["0.0.0.0/0", "10.255.0.0/24", "10.255.1.0/24", "10.255.2.0/24", "10.255.3.0/24"]
+# Class 1 also holds the internet LANs (10.N.2.0/24, Gi0/6). The site-to-site LANs (10.N.1.0/24, Gi0/7)
+# are covered by the /16 aggregates in class 2.
+CLASS1 = ["0.0.0.0/0", "10.255.0.0/24", "10.255.1.0/24", "10.255.2.0/24", "10.255.3.0/24",
+          "10.1.2.0/24", "10.2.2.0/24", "10.3.2.0/24"]
 CLASS2 = ["10.1.0.0/16", "10.2.0.0/16", "10.3.0.0/16"]
 LP_PRIMARY, LP_BACKUP = 200, 100
 
@@ -55,10 +58,11 @@ def lo(name):
     return f"10.255.{SITES[name[0]]['n']}.{name[1]}"
 
 
-def lan(name):
-    """Site LAN (Gi0/7): VIP .1, router 1 = .2, router 2 = .3"""
+def lan(name, third):
+    """Site LAN 10.<site>.<third>.0/24: VIP .1, router 1 = .2, router 2 = .3.
+    third = 1: LAN-S2S (Gi0/7, site-to-site), third = 2: LAN-INET (Gi0/6, internet)."""
     n = SITES[name[0]]["n"]
-    return f"10.{n}.1.1", f"10.{n}.1.{1 + int(name[1])}"
+    return f"10.{n}.{third}.1", f"10.{n}.{third}.{1 + int(name[1])}"
 
 
 def check():
@@ -68,7 +72,8 @@ def check():
         addrs = [lo(name), r["g01"], r["g02"][0], r["g03"][0]]
         if "mgmt" in r:
             addrs.append(r["mgmt"])
-        addrs.append(lan(name)[1])
+        addrs.append(lan(name, 1)[1])
+        addrs.append(lan(name, 2)[1])
         for a in addrs:
             assert a not in seen, f"duplicate address {a}: {name} and {seen[a]}"
             seen[a] = name
@@ -82,6 +87,7 @@ def check():
             assert len(back) == 1 and back[0][0] == na and back[0][2] == a, f"link {name}-{nbr} not mirrored"
             assert ipaddress.ip_interface(f"{a}/31").network == ipaddress.ip_interface(f"{na}/31").network
             assert name[1] == nbr[1], f"{name}-{nbr} crosses planes"
+    assert not set(CLASS1) & set(CLASS2), "a prefix is in both traffic classes"
     for s, o in ORIGIN.items():
         for p in o:
             assert p in CLASS1 or p in CLASS2, f"{p} originated by {s} has no traffic class"
@@ -92,14 +98,15 @@ def build(name):
     s = name[0]
     site = SITES[s]
     plane = int(name[1])
-    vip, own_lan = lan(name)
+    vip_s, ip_s = lan(name, 1)
+    vip_i, ip_i = lan(name, 2)
     lp1, lp2 = (LP_PRIMARY, LP_BACKUP) if plane == 1 else (LP_BACKUP, LP_PRIMARY)
     L = []
     add = L.append
 
     add(f"! {name} - AS {site['asn']} - plane {plane} - initial configuration")
     add("! Paste stage by stage and verify after each stage. Edit CHANGE_ME in stage 1 first.")
-    add("! Stage 6 needs the site LAN switch cabled to Gi0/7 first.")
+    add("! Stage 6 needs the two site LAN switches cabled: Gi0/7 (LAN-S2S) and Gi0/6 (LAN-INET).")
     add("!")
     add("! ===== STAGE 1: base and SSH =====")
     add(f"hostname {name}")
@@ -213,20 +220,29 @@ def build(name):
     add(" exit-address-family")
     add("exit")
     add("!")
-    add("! ===== STAGE 6: site LAN and HSRP (Gi0/7) =====")
-    add("interface GigabitEthernet0/7")
-    add(" description site LAN (HSRP gateway)")
-    add(f" ip address {own_lan} 255.255.255.0")
-    add(" standby version 2")
-    add(f" standby 1 ip {vip}")
-    add(f" standby 1 priority {110 if plane == 1 else 100}")
-    add(" standby 1 preempt")
-    add(" standby 1 timers 1 3")
-    add(" ip ospf 1 area 0")
-    add(" no shutdown")
+    add("! ===== STAGE 6: site LANs and HSRP (Gi0/7 site-to-site, Gi0/6 internet) =====")
+    # (interface, description, address, VIP, HSRP group, priority)
+    # LAN-S2S: router 2 is active, so site-to-site traffic leaves on plane 2.
+    # LAN-INET: router 1 is active, so internet traffic leaves on plane 1.
+    lans = [
+        ("GigabitEthernet0/7", "LAN-S2S site-to-site, HSRP active on router 2", ip_s, vip_s, 1, 110 if plane == 2 else 100),
+        ("GigabitEthernet0/6", "LAN-INET internet, HSRP active on router 1", ip_i, vip_i, 2, 110 if plane == 1 else 100),
+    ]
+    for ifname, descr, addr, vip, grp, prio in lans:
+        add(f"interface {ifname}")
+        add(f" description {descr}")
+        add(f" ip address {addr} 255.255.255.0")
+        add(" standby version 2")
+        add(f" standby {grp} ip {vip}")
+        add(f" standby {grp} priority {prio}")
+        add(f" standby {grp} preempt")
+        add(f" standby {grp} timers 1 3")
+        add(" ip ospf 1 area 0")
+        add(" no shutdown")
     add("exit")
     add("router ospf 1")
     add(" passive-interface GigabitEthernet0/7")
+    add(" passive-interface GigabitEthernet0/6")
     add("end")
     add("write memory")
     return "\n".join(L) + "\n"
