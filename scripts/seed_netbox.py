@@ -1,22 +1,114 @@
 #!/usr/bin/env python3
-"""Seed NetBox with the WAN lab (3 sites, 6 IOSv routers, 9 cables).
+"""Apply data/lab.yml to NetBox. Git is the master, NetBox follows.
 
-Idempotent: safe to run again, it only creates what is missing.
+    python scripts/seed_netbox.py --validate-only   # check the YAML, no NetBox needed
+    python scripts/seed_netbox.py                   # apply it (idempotent)
+    python scripts/seed_netbox.py --strict          # also exit 1 if NetBox has drift
 
-    pip install pynetbox
-    export NETBOX_URL=http://localhost:8000
-    export NETBOX_TOKEN=<token>
-    python seed_netbox.py
+Environment: NETBOX_URL (default http://localhost:8000), NETBOX_TOKEN (bare token).
+The script never deletes anything. Objects that exist in NetBox but not in the
+YAML are only reported as DRIFT.
 """
+import argparse
 import ipaddress
 import os
+import sys
+from pathlib import Path
 
-import pynetbox
+import yaml
+
+DEFAULT_DATA = Path(__file__).resolve().parent.parent / "data" / "lab.yml"
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--data", default=str(DEFAULT_DATA), help="path to lab.yml")
+ap.add_argument("--validate-only", action="store_true", help="check the YAML and stop")
+ap.add_argument("--strict", action="store_true", help="exit 1 when drift is found")
+args = ap.parse_args()
+
+with open(args.data) as f:
+    lab = yaml.safe_load(f)
+
+
+# ------------------------------------------------------------ validation ----
+def validate(lab):
+    errors = []
+    sites = {s["slug"] for s in lab["sites"]}
+    tags = set(lab["tags"])
+    devs = {d["name"]: d for d in lab["devices"]}
+    if len(devs) != len(lab["devices"]):
+        errors.append("duplicate device names")
+
+    seen_ips = {}
+    for d in lab["devices"]:
+        if d["site"] not in sites:
+            errors.append(f"{d['name']}: unknown site {d['site']}")
+        if d["primary_interface"] not in d["interfaces"]:
+            errors.append(f"{d['name']}: primary_interface {d['primary_interface']} not defined")
+        for ifname, ifd in d["interfaces"].items():
+            try:
+                ip = ipaddress.ip_interface(ifd["ip"])
+            except ValueError as e:
+                errors.append(f"{d['name']} {ifname}: {e}")
+                continue
+            key = str(ip.ip)
+            if key in seen_ips:
+                errors.append(f"duplicate IP {key}: {seen_ips[key]} and {d['name']} {ifname}")
+            seen_ips[key] = f"{d['name']} {ifname}"
+
+    used = {}
+    for link in lab["links"]:
+        if link.get("tag") and link["tag"] not in tags:
+            errors.append(f"link {link['a']} - {link['b']}: unknown tag {link['tag']}")
+        for end in (link["a"], link["b"]):
+            dev, _, ifname = end.partition(":")
+            if dev not in devs or ifname not in devs[dev]["interfaces"]:
+                errors.append(f"link end {end} does not exist in devices")
+            if end in used:
+                errors.append(f"{end} is used by two links")
+            used[end] = True
+
+    for g in lab["fhrp_groups"]:
+        net = None
+        for m in g["members"]:
+            ifd = devs.get(m["device"], {}).get("interfaces", {}).get(m["interface"])
+            if not ifd:
+                errors.append(f"HSRP {g['name']}: {m['device']} {m['interface']} not defined")
+                continue
+            net = ipaddress.ip_interface(ifd["ip"]).network
+            if ipaddress.ip_interface(g["vip"]).ip not in net:
+                errors.append(f"HSRP {g['name']}: VIP {g['vip']} is not in {net}")
+    return errors
+
+
+def derived_prefixes(lab):
+    """Prefixes taken from interface addresses (skipping /32) plus the explicit list."""
+    out = {p["prefix"]: p["description"] for p in lab["prefixes"]}
+    for d in lab["devices"]:
+        for ifd in d["interfaces"].values():
+            net = ipaddress.ip_interface(ifd["ip"]).network
+            if net.prefixlen < 32:
+                out.setdefault(str(net), ifd["description"])
+    return out
+
+
+problems = validate(lab)
+if problems:
+    print("Validation FAILED:")
+    for p in problems:
+        print("  -", p)
+    sys.exit(1)
+PREFIXES = derived_prefixes(lab)
+print(f"Validation OK: {len(lab['sites'])} sites, {len(lab['devices'])} devices, "
+      f"{len(lab['links'])} links, {len(PREFIXES)} prefixes, {len(lab['fhrp_groups'])} HSRP groups")
+if args.validate_only:
+    sys.exit(0)
+
+# --------------------------------------------------------------- NetBox ----
+import pynetbox  # noqa: E402  (not needed for --validate-only)
 
 TOKEN = os.environ["NETBOX_TOKEN"].strip()
 if TOKEN.lower().startswith(("bearer ", "token ")):
-    TOKEN = TOKEN.split(None, 1)[1]          # accept a pasted "Bearer xxx"
-
+    TOKEN = TOKEN.split(None, 1)[1]
 nb = pynetbox.api(os.environ.get("NETBOX_URL", "http://localhost:8000"), token=TOKEN)
 if TOKEN.startswith("nbt_"):                  # v2 tokens (NetBox 4.5+) use Bearer
     nb.http_session.headers["Authorization"] = f"Bearer {TOKEN}"
@@ -34,86 +126,52 @@ def ensure(endpoint, lookup, **extra):
     return endpoint.create(**lookup, **extra)
 
 
-def gi(n):
-    return f"GigabitEthernet0/{n}"
-
-
-# ---------------------------------------------------------------- data ----
-SITES = {"A": 65001, "B": 65002, "C": 65003}
-
-# name: (site letter, Loopback0, {interface number: address})
-ROUTERS = {
-    "A1": ("A", "10.255.1.1/32", {0: "10.255.0.11/24", 1: "10.1.0.0/31", 2: "10.0.1.0/31", 3: "10.0.1.2/31", 6: "10.1.2.2/24", 7: "10.1.1.2/24"}),
-    "A2": ("A", "10.255.1.2/32", {0: "10.255.0.12/24", 1: "10.1.0.1/31", 2: "10.0.2.0/31", 3: "10.0.2.2/31", 6: "10.1.2.3/24", 7: "10.1.1.3/24"}),
-    "B1": ("B", "10.255.2.1/32", {1: "10.2.0.0/31", 2: "10.0.1.1/31", 3: "10.0.1.4/31", 6: "10.2.2.2/24", 7: "10.2.1.2/24"}),
-    "B2": ("B", "10.255.2.2/32", {1: "10.2.0.1/31", 2: "10.0.2.1/31", 3: "10.0.2.4/31", 6: "10.2.2.3/24", 7: "10.2.1.3/24"}),
-    "C1": ("C", "10.255.3.1/32", {1: "10.3.0.0/31", 2: "10.0.1.3/31", 3: "10.0.1.5/31", 6: "10.3.2.2/24", 7: "10.3.1.2/24"}),
-    "C2": ("C", "10.255.3.2/32", {1: "10.3.0.1/31", 2: "10.0.2.3/31", 3: "10.0.2.5/31", 6: "10.3.2.3/24", 7: "10.3.1.3/24"}),
-}
-
-# (device, if#, device, if#, tag) -> 9 cables
-LINKS = [
-    ("A1", 1, "A2", 1, "intra-site"),
-    ("B1", 1, "B2", 1, "intra-site"),
-    ("C1", 1, "C2", 1, "intra-site"),
-    ("A1", 2, "B1", 2, "plane1"),
-    ("A1", 3, "C1", 2, "plane1"),
-    ("B1", 3, "C1", 3, "plane1"),
-    ("A2", 2, "B2", 2, "plane2"),
-    ("A2", 3, "C2", 2, "plane2"),
-    ("B2", 3, "C2", 3, "plane2"),
-]
-
-HOST_IP = "10.255.0.1/24"          # tun-gns3, default gateway for A1/A2
-MGMT_PREFIX = "10.255.0.0/24"
-
-# ------------------------------------------------------- base objects ----
 print("Base objects")
-tags = {t: ensure(nb.extras.tags, {"slug": t}, name=t)
-        for t in ("intra-site", "plane1", "plane2")}
-
-manufacturer = ensure(nb.dcim.manufacturers, {"slug": "cisco"}, name="Cisco")
-dtype = ensure(nb.dcim.device_types, {"slug": "iosv"},
-               manufacturer=manufacturer.id, model="IOSv")
-for i in range(8):
-    if not nb.dcim.interface_templates.get(devicetype_id=dtype.id, name=gi(i)):
-        nb.dcim.interface_templates.create(device_type=dtype.id, name=gi(i), type="1000base-t")
-role = ensure(nb.dcim.device_roles, {"slug": "wan-router"}, name="WAN Router", color="2196f3")
-platform = ensure(nb.dcim.platforms, {"slug": "cisco_ios"}, name="Cisco IOS",
+tags = {t: ensure(nb.extras.tags, {"slug": t}, name=t) for t in lab["tags"]}
+mf = lab["manufacturer"]
+manufacturer = ensure(nb.dcim.manufacturers, {"slug": mf["slug"]}, name=mf["name"])
+dt = lab["device_type"]
+dtype = ensure(nb.dcim.device_types, {"slug": dt["slug"]},
+               manufacturer=manufacturer.id, model=dt["model"])
+for i in range(dt["interface_count"]):
+    name = f"{dt['interface_prefix']}{i}"
+    if not nb.dcim.interface_templates.get(devicetype_id=dtype.id, name=name):
+        nb.dcim.interface_templates.create(device_type=dtype.id, name=name, type="1000base-t")
+rl = lab["role"]
+role = ensure(nb.dcim.device_roles, {"slug": rl["slug"]}, name=rl["name"], color=rl["color"])
+pl = lab["platform"]
+platform = ensure(nb.dcim.platforms, {"slug": pl["slug"]}, name=pl["name"],
                   manufacturer=manufacturer.id)
 rir = ensure(nb.ipam.rirs, {"slug": "private"}, name="Private", is_private=True)
 
 sites = {}
-for letter, asn in SITES.items():
-    sites[letter] = ensure(nb.dcim.sites, {"slug": f"site-{letter.lower()}"},
-                           name=f"Site {letter}", status="active")
-    if not nb.ipam.asns.get(asn=asn):
-        print(f"  + asn: {asn}")
-        nb.ipam.asns.create(asn=asn, rir=rir.id, sites=[sites[letter].id],
-                            description=f"Site {letter}")
+for s in lab["sites"]:
+    sites[s["slug"]] = ensure(nb.dcim.sites, {"slug": s["slug"]}, name=s["name"], status="active")
+    if not nb.ipam.asns.get(asn=s["asn"]):
+        print(f"  + asn: {s['asn']}")
+        nb.ipam.asns.create(asn=s["asn"], rir=rir.id, sites=[sites[s["slug"]].id],
+                            description=s["name"])
 
-# ------------------------------------------------ devices, IPs, loops ----
 print("Devices, interfaces, IPs")
-devices, ifaces, primary = {}, {}, {}
+devices = {}
 
 
 def get_iface(dev, name):
     """Find an interface by full name, falling back to the short Gi0/x form."""
-    dev_id = devices[dev].id
     for candidate in (name, name.replace("GigabitEthernet", "Gi")):
-        iface = nb.dcim.interfaces.get(device_id=dev_id, name=candidate)
+        iface = nb.dcim.interfaces.get(device_id=devices[dev].id, name=candidate)
         if iface:
             return iface
     raise SystemExit(f"Interface {name} not found on {dev}; "
                      f"check its device type / interface names in NetBox.")
 
 
-def assign_ip(address, iface, **extra):
+def assign_ip(address, iface):
     """Make sure `address` exists and is assigned to `iface` (adopt existing IPs)."""
     existing = list(nb.ipam.ip_addresses.filter(address=address))
     for ip in existing:
         if ip.assigned_object_type == "dcim.interface" and ip.assigned_object_id == iface.id:
-            return ip                                   # already correct
+            return ip
     if existing:
         ip = existing[0]
         old = (f"{ip.assigned_object.device.name} {ip.assigned_object.name}"
@@ -126,83 +184,86 @@ def assign_ip(address, iface, **extra):
     print(f"  + ip: {address} on {iface.device.name} {iface.name}")
     return nb.ipam.ip_addresses.create(address=address, status="active",
                                        assigned_object_type="dcim.interface",
-                                       assigned_object_id=iface.id, **extra)
+                                       assigned_object_id=iface.id)
 
 
-for name, (letter, loopback, addrs) in ROUTERS.items():
-    dev = nb.dcim.devices.get(name=name)
+for d in lab["devices"]:
+    dev = nb.dcim.devices.get(name=d["name"])
     if not dev:
-        print(f"  + device: {name}")
-        dev = nb.dcim.devices.create(name=name, device_type=dtype.id,
-                                     site=sites[letter].id, platform=platform.id,
+        print(f"  + device: {d['name']}")
+        dev = nb.dcim.devices.create(name=d["name"], device_type=dtype.id,
+                                     site=sites[d["site"]].id, platform=platform.id,
                                      status="active", **{ROLE_KEY: role.id})
-    devices[name] = dev
+    elif not dev.platform:
+        dev.platform = platform.id
+        dev.save()
+    devices[d["name"]] = dev
 
-    lo = nb.dcim.interfaces.get(device_id=dev.id, name="Loopback0")
-    if not lo:
-        lo = nb.dcim.interfaces.create(device=dev.id, name="Loopback0", type="virtual")
-    lo_ip = assign_ip(loopback, lo)
+    ips = {}
+    for ifname, ifd in d["interfaces"].items():
+        if ifname.lower().startswith("loopback"):
+            iface = nb.dcim.interfaces.get(device_id=dev.id, name=ifname) or \
+                nb.dcim.interfaces.create(device=dev.id, name=ifname, type="virtual")
+        else:
+            iface = get_iface(d["name"], ifname)
+        if iface.description != ifd["description"]:
+            iface.description = ifd["description"]
+            iface.save()
+        ips[ifname] = assign_ip(ifd["ip"], iface)
 
-    ips = {num: assign_ip(addr, get_iface(name, gi(num))) for num, addr in addrs.items()}
-
-    # A1/A2 are managed on Gi0/0, B and C are reached through their loopback
-    primary[name] = ips[0] if 0 in ips else lo_ip
-    if not dev.primary_ip4 or dev.primary_ip4.id != primary[name].id:
-        dev.primary_ip4 = primary[name].id
+    primary = ips[d["primary_interface"]]
+    if not dev.primary_ip4 or dev.primary_ip4.id != primary.id:
+        dev.primary_ip4 = primary.id
         dev.save()
 
-# ------------------------------------------------------------ cables ----
 print("Cables")
-for da, ia, db, ib, tag in LINKS:
-    a, b = get_iface(da, gi(ia)), get_iface(db, gi(ib))
+for link in lab["links"]:
+    (da, ia), (db, ib) = link["a"].split(":"), link["b"].split(":")
+    a, b = get_iface(da, ia), get_iface(db, ib)
     if a.cable or b.cable:
         continue
-    print(f"  + cable: {da} {gi(ia)} <-> {db} {gi(ib)} [{tag}]")
+    print(f"  + cable: {da} {ia} <-> {db} {ib} [{link.get('tag')}]")
     nb.dcim.cables.create(
         a_terminations=[{"object_type": "dcim.interface", "object_id": a.id}],
         b_terminations=[{"object_type": "dcim.interface", "object_id": b.id}],
-        tags=[tags[tag].id], label=f"{da}-{db}")
+        tags=[tags[link["tag"]].id] if link.get("tag") else [], label=f"{da}-{db}")
 
-# ------------------------------------------------------------ prefixes ----
 print("Prefixes")
-prefixes = {MGMT_PREFIX: "Management (GNS3 Cloud1 / tun-gns3)"}
-for n, letter in enumerate("ABC", 1):
-    prefixes[f"10.{n}.0.0/16"] = f"Site {letter} aggregate"
-    prefixes[f"10.255.{n}.0/24"] = f"Site {letter} loopbacks"
-for name, (letter, loopback, addrs) in ROUTERS.items():
-    for num, addr in addrs.items():
-        net = ipaddress.ip_interface(addr).network
-        if num == 0:
-            continue
-        kind = {1: "intra-site link", 2: "inter-site link", 3: "inter-site link",
-                6: f"Site {letter} LAN-INET", 7: f"Site {letter} LAN-S2S"}[num]
-        prefixes.setdefault(str(net), kind)
-for prefix, desc in prefixes.items():
+for prefix, desc in PREFIXES.items():
     ensure(nb.ipam.prefixes, {"prefix": prefix}, description=desc, status="active")
+for e in lab["external_ips"]:
+    ensure(nb.ipam.ip_addresses, {"address": e["address"]},
+           status="active", description=e["description"])
 
-# host (tun-gns3) address
-ensure(nb.ipam.ip_addresses, {"address": HOST_IP},
-       status="active", description="Host tun-gns3, default gateway for A1/A2")
-
-# --------------------------------------------------------------- HSRP ----
 print("HSRP")
-for n, letter in enumerate("ABC", 1):
-    # (group, interface, third octet, LAN name, router number that is active)
-    for grp, ifnum, third, lan, active in ((1, 7, 1, "LAN-S2S", 2), (2, 6, 2, "LAN-INET", 1)):
-        group = ensure(nb.ipam.fhrp_groups, {"name": f"{letter}-{lan}"},
-                       protocol="hsrp", group_id=grp)
-        vip = f"10.{n}.{third}.1/24"
-        if not list(nb.ipam.ip_addresses.filter(address=vip)):
-            nb.ipam.ip_addresses.create(address=vip, status="active", role="hsrp",
-                                        assigned_object_type="ipam.fhrpgroup",
-                                        assigned_object_id=group.id)
-        for r in (1, 2):
-            iface = get_iface(f"{letter}{r}", gi(ifnum))
-            exists = list(nb.ipam.fhrp_group_assignments.filter(
-                group_id=group.id, interface_type="dcim.interface", interface_id=iface.id))
-            if not exists:
-                nb.ipam.fhrp_group_assignments.create(
-                    group=group.id, interface_type="dcim.interface",
-                    interface_id=iface.id, priority=110 if r == active else 100)
+for g in lab["fhrp_groups"]:
+    group = ensure(nb.ipam.fhrp_groups, {"name": g["name"]},
+                   protocol=g["protocol"], group_id=g["group"])
+    if not list(nb.ipam.ip_addresses.filter(address=g["vip"])):
+        nb.ipam.ip_addresses.create(address=g["vip"], status="active", role="hsrp",
+                                    assigned_object_type="ipam.fhrpgroup",
+                                    assigned_object_id=group.id)
+    for m in g["members"]:
+        iface = get_iface(m["device"], m["interface"])
+        if not list(nb.ipam.fhrp_group_assignments.filter(
+                group_id=group.id, interface_type="dcim.interface", interface_id=iface.id)):
+            nb.ipam.fhrp_group_assignments.create(
+                group=group.id, interface_type="dcim.interface",
+                interface_id=iface.id, priority=m["priority"])
 
+# ---------------------------------------------------------------- drift ----
+print("Drift check (report only, nothing is deleted)")
+drift = 0
+want_devs = {d["name"] for d in lab["devices"]}
+for dev in nb.dcim.devices.filter(role=rl["slug"]):
+    if dev.name not in want_devs:
+        print(f"  DRIFT: device {dev.name} is in NetBox but not in lab.yml")
+        drift += 1
+for p in nb.ipam.prefixes.filter(within_include="10.0.0.0/8"):
+    if str(p.prefix) not in PREFIXES:
+        print(f"  DRIFT: prefix {p.prefix} is in NetBox but not in lab.yml")
+        drift += 1
+print("  none" if not drift else f"  {drift} item(s) differ from git")
 print("Done.")
+if drift and args.strict:
+    sys.exit(1)

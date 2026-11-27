@@ -1,0 +1,138 @@
+# Lab source of truth. Git is the master: edit this file, review it in a pull request,
+# then apply it with scripts/seed_netbox.py. Check it first with --validate-only.
+# Interface 'ip' values are assigned to the interface; prefixes are derived from them.
+
+manufacturer: {name: Cisco, slug: cisco}
+device_type: {model: IOSv, slug: iosv, interface_prefix: GigabitEthernet0/, interface_count: 8}
+platform: {name: Cisco IOS, slug: cisco_ios}
+role: {name: WAN Router, slug: wan-router, color: 2196f3}
+tags: [intra-site, plane1, plane2]
+sites:
+- {slug: site-a, name: Site A, asn: 65001}
+- {slug: site-b, name: Site B, asn: 65002}
+- {slug: site-c, name: Site C, asn: 65003}
+devices:
+- name: A1
+  site: site-a
+  primary_interface: GigabitEthernet0/0
+  interfaces:
+    Loopback0: {ip: 10.255.1.1/32, description: loopback}
+    GigabitEthernet0/0: {ip: 10.255.0.11/24, description: management (GNS3 Cloud1)}
+    GigabitEthernet0/1: {ip: 10.1.0.0/31, description: link A1-A2}
+    GigabitEthernet0/2: {ip: 10.0.1.0/31, description: link A1-B1}
+    GigabitEthernet0/3: {ip: 10.0.1.2/31, description: link A1-C1}
+    GigabitEthernet0/6: {ip: 10.1.2.2/24, description: Site A LAN-INET}
+    GigabitEthernet0/7: {ip: 10.1.1.2/24, description: Site A LAN-S2S}
+- name: A2
+  site: site-a
+  primary_interface: GigabitEthernet0/0
+  interfaces:
+    Loopback0: {ip: 10.255.1.2/32, description: loopback}
+    GigabitEthernet0/0: {ip: 10.255.0.12/24, description: management (GNS3 Cloud1)}
+    GigabitEthernet0/1: {ip: 10.1.0.1/31, description: link A1-A2}
+    GigabitEthernet0/2: {ip: 10.0.2.0/31, description: link A2-B2}
+    GigabitEthernet0/3: {ip: 10.0.2.2/31, description: link A2-C2}
+    GigabitEthernet0/6: {ip: 10.1.2.3/24, description: Site A LAN-INET}
+    GigabitEthernet0/7: {ip: 10.1.1.3/24, description: Site A LAN-S2S}
+- name: B1
+  site: site-b
+  primary_interface: Loopback0
+  interfaces:
+    Loopback0: {ip: 10.255.2.1/32, description: loopback}
+    GigabitEthernet0/1: {ip: 10.2.0.0/31, description: link B1-B2}
+    GigabitEthernet0/2: {ip: 10.0.1.1/31, description: link A1-B1}
+    GigabitEthernet0/3: {ip: 10.0.1.4/31, description: link B1-C1}
+    GigabitEthernet0/6: {ip: 10.2.2.2/24, description: Site B LAN-INET}
+    GigabitEthernet0/7: {ip: 10.2.1.2/24, description: Site B LAN-S2S}
+- name: B2
+  site: site-b
+  primary_interface: Loopback0
+  interfaces:
+    Loopback0: {ip: 10.255.2.2/32, description: loopback}
+    GigabitEthernet0/1: {ip: 10.2.0.1/31, description: link B1-B2}
+    GigabitEthernet0/2: {ip: 10.0.2.1/31, description: link A2-B2}
+    GigabitEthernet0/3: {ip: 10.0.2.4/31, description: link B2-C2}
+    GigabitEthernet0/6: {ip: 10.2.2.3/24, description: Site B LAN-INET}
+    GigabitEthernet0/7: {ip: 10.2.1.3/24, description: Site B LAN-S2S}
+- name: C1
+  site: site-c
+  primary_interface: Loopback0
+  interfaces:
+    Loopback0: {ip: 10.255.3.1/32, description: loopback}
+    GigabitEthernet0/1: {ip: 10.3.0.0/31, description: link C1-C2}
+    GigabitEthernet0/2: {ip: 10.0.1.3/31, description: link A1-C1}
+    GigabitEthernet0/3: {ip: 10.0.1.5/31, description: link B1-C1}
+    GigabitEthernet0/6: {ip: 10.3.2.2/24, description: Site C LAN-INET}
+    GigabitEthernet0/7: {ip: 10.3.1.2/24, description: Site C LAN-S2S}
+- name: C2
+  site: site-c
+  primary_interface: Loopback0
+  interfaces:
+    Loopback0: {ip: 10.255.3.2/32, description: loopback}
+    GigabitEthernet0/1: {ip: 10.3.0.1/31, description: link C1-C2}
+    GigabitEthernet0/2: {ip: 10.0.2.3/31, description: link A2-C2}
+    GigabitEthernet0/3: {ip: 10.0.2.5/31, description: link B2-C2}
+    GigabitEthernet0/6: {ip: 10.3.2.3/24, description: Site C LAN-INET}
+    GigabitEthernet0/7: {ip: 10.3.1.3/24, description: Site C LAN-S2S}
+links:
+- {a: 'A1:GigabitEthernet0/1', b: 'A2:GigabitEthernet0/1', tag: intra-site}
+- {a: 'B1:GigabitEthernet0/1', b: 'B2:GigabitEthernet0/1', tag: intra-site}
+- {a: 'C1:GigabitEthernet0/1', b: 'C2:GigabitEthernet0/1', tag: intra-site}
+- {a: 'A1:GigabitEthernet0/2', b: 'B1:GigabitEthernet0/2', tag: plane1}
+- {a: 'A1:GigabitEthernet0/3', b: 'C1:GigabitEthernet0/2', tag: plane1}
+- {a: 'B1:GigabitEthernet0/3', b: 'C1:GigabitEthernet0/3', tag: plane1}
+- {a: 'A2:GigabitEthernet0/2', b: 'B2:GigabitEthernet0/2', tag: plane2}
+- {a: 'A2:GigabitEthernet0/3', b: 'C2:GigabitEthernet0/2', tag: plane2}
+- {a: 'B2:GigabitEthernet0/3', b: 'C2:GigabitEthernet0/3', tag: plane2}
+prefixes:
+- {prefix: 10.1.0.0/16, description: Site A aggregate}
+- {prefix: 10.255.1.0/24, description: Site A loopbacks}
+- {prefix: 10.2.0.0/16, description: Site B aggregate}
+- {prefix: 10.255.2.0/24, description: Site B loopbacks}
+- {prefix: 10.3.0.0/16, description: Site C aggregate}
+- {prefix: 10.255.3.0/24, description: Site C loopbacks}
+external_ips:
+- {address: 10.255.0.1/24, description: 'Host tun-gns3, default gateway for A1/A2'}
+fhrp_groups:
+- name: A-LAN-S2S
+  protocol: hsrp
+  group: 1
+  vip: 10.1.1.1/24
+  members:
+  - {device: A1, interface: GigabitEthernet0/7, priority: 100}
+  - {device: A2, interface: GigabitEthernet0/7, priority: 110}
+- name: A-LAN-INET
+  protocol: hsrp
+  group: 2
+  vip: 10.1.2.1/24
+  members:
+  - {device: A1, interface: GigabitEthernet0/6, priority: 110}
+  - {device: A2, interface: GigabitEthernet0/6, priority: 100}
+- name: B-LAN-S2S
+  protocol: hsrp
+  group: 1
+  vip: 10.2.1.1/24
+  members:
+  - {device: B1, interface: GigabitEthernet0/7, priority: 100}
+  - {device: B2, interface: GigabitEthernet0/7, priority: 110}
+- name: B-LAN-INET
+  protocol: hsrp
+  group: 2
+  vip: 10.2.2.1/24
+  members:
+  - {device: B1, interface: GigabitEthernet0/6, priority: 110}
+  - {device: B2, interface: GigabitEthernet0/6, priority: 100}
+- name: C-LAN-S2S
+  protocol: hsrp
+  group: 1
+  vip: 10.3.1.1/24
+  members:
+  - {device: C1, interface: GigabitEthernet0/7, priority: 100}
+  - {device: C2, interface: GigabitEthernet0/7, priority: 110}
+- name: C-LAN-INET
+  protocol: hsrp
+  group: 2
+  vip: 10.3.2.1/24
+  members:
+  - {device: C1, interface: GigabitEthernet0/6, priority: 110}
+  - {device: C2, interface: GigabitEthernet0/6, priority: 100}
